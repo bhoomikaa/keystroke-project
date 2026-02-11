@@ -11,11 +11,11 @@ OUTPUT_CSV = "../outputs/keystroke_features.csv"
 
 
 def extract_features(file_path):
+    events = []
+
     # ----------------------------
     # Step 1: Parse events
     # ----------------------------
-    events = []
-
     with open(file_path, "r", encoding="latin1") as f:
         for line in f:
             line = line.strip()
@@ -39,6 +39,8 @@ def extract_features(file_path):
     # ----------------------------
     keydown_times = defaultdict(list)
     hold_times = []
+    per_key_holds = defaultdict(list)
+    per_key_inter = defaultdict(list)
 
     for ts, ev, key in events:
         if ev == "KeyDown":
@@ -46,37 +48,44 @@ def extract_features(file_path):
         elif ev == "KeyUp":
             if keydown_times[key]:
                 down_ts = keydown_times[key].pop(0)
-                hold_times.append(ts - down_ts)
+                duration = ts - down_ts
+                hold_times.append(duration)
+                per_key_holds[key].append(duration)
 
     # ----------------------------
     # Step 3: Inter-key delays
     # ----------------------------
     inter_key_delays = []
     last_keydown_ts = None
+    last_key = None
 
     for ts, ev, key in events:
         if ev == "KeyDown":
             if last_keydown_ts is not None:
-                inter_key_delays.append(ts - last_keydown_ts)
+                delay = ts - last_keydown_ts
+                inter_key_delays.append(delay)
+
+                # Assign delay to previous key
+                per_key_inter[last_key].append(delay)
+
             last_keydown_ts = ts
+            last_key = key
 
     # ----------------------------
     # Step 4: Typing rate
     # ----------------------------
     keydown_count = sum(1 for _, ev, _ in events if ev == "KeyDown")
     total_time = events[-1][0] - events[0][0]
-
     typing_rate = keydown_count / total_time if total_time > 0 else 0
 
     # ----------------------------
-    # Step 5: Error-related stats
+    # Step 5: Backspace count
     # ----------------------------
     backspace_count = sum(
         1 for _, ev, key in events
-        if ev == "KeyDown" and "backspace" in key.lower()
+        if ev == "KeyDown" and "back" in key.lower()
     )
 
-    # Convert to numpy arrays
     hold_arr = np.array(hold_times)
     inter_arr = np.array(inter_key_delays)
 
@@ -84,7 +93,7 @@ def extract_features(file_path):
         return None
 
     # ----------------------------
-    # Step 6: Aggregate statistics
+    # Step 6: Global features
     # ----------------------------
     features = {
         "hold_mean": hold_arr.mean(),
@@ -98,6 +107,28 @@ def extract_features(file_path):
         "typing_rate": typing_rate,
         "backspace_count": backspace_count,
     }
+
+    # ----------------------------
+    # Step 7: Per-key features
+    # ----------------------------
+    selected_keys = ["E", "T", "A", "I", "N", "S", "R", "H"]
+
+    for k in selected_keys:
+        # Hold features
+        if k in per_key_holds and len(per_key_holds[k]) > 0:
+            features[f"hold_mean_{k}"] = np.mean(per_key_holds[k])
+            features[f"hold_std_{k}"] = np.std(per_key_holds[k])
+        else:
+            features[f"hold_mean_{k}"] = 0
+            features[f"hold_std_{k}"] = 0
+
+        # Inter-key features
+        if k in per_key_inter and len(per_key_inter[k]) > 0:
+            features[f"inter_mean_{k}"] = np.mean(per_key_inter[k])
+            features[f"inter_std_{k}"] = np.std(per_key_inter[k])
+        else:
+            features[f"inter_mean_{k}"] = 0
+            features[f"inter_std_{k}"] = 0
 
     return features
 
@@ -139,6 +170,7 @@ for root, dirs, files in os.walk(DATA_ROOT):
         rows.append(feats)
 
 df = pd.DataFrame(rows)
+
 os.makedirs(os.path.dirname(OUTPUT_CSV), exist_ok=True)
 df.to_csv(OUTPUT_CSV, index=False)
 
